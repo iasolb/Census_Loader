@@ -3,17 +3,15 @@ import sys
 from pathlib import Path
 from typing import Optional
 import pickle
+from functools import reduce
 import pandas as pd
 from .utils import Config, _load_census_bureau
-from .census_scores import score
 from .series import ALL_SERIES, CATEGORIES, SUBCATEGORIES
 
 # PUBLIC API
 
 
-def pull_census(
-    config: Config, apply_scores: bool = False
-) -> dict[str, pd.DataFrame] | None:
+def pull_census(config: Config) -> dict[str, pd.DataFrame] | None:
     """
     Pull Census Bureau data and optionally apply scoring.
 
@@ -32,12 +30,8 @@ def pull_census(
     result = _load_census_bureau(config=config)
     if result is None:
         return None
-
-    if apply_scores:
-        output = score(result)
     else:
         output = result
-
     # ── Persist ──────────────────────────────────────────────────────────
     config.OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 

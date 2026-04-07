@@ -6,6 +6,8 @@ import requests
 from dotenv import load_dotenv
 from census import Census
 import os, time
+from functools import reduce
+import pickle
 from .series import (
     ALL_SERIES,
     POPULATION,
@@ -64,7 +66,6 @@ DATASET_DISPATCH = {
 # ║  SERIES RESOLVER — the user-facing abstraction layer                    ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 
-# Flatten SUBCATEGORIES into a single lookup: {"HOUSEHOLD_INCOME": {...}, ...}
 _SUBCATEGORY_FLAT: dict[str, dict] = {}
 for _cat, _subs in SUBCATEGORIES.items():
     for _subname, _subdict in _subs.items():
@@ -96,7 +97,7 @@ def _resolve_one(token: str) -> dict:
     if token_upper in _SUBCATEGORY_FLAT:
         return _SUBCATEGORY_FLAT[token_upper]
 
-    # Nothing matched — build a helpful error
+    # Nothing matched — helpful error
     raise KeyError(
         f"'{token}' is not a recognized series, category, or subcategory.\n"
         f"  Use available() to browse, or search('keyword') to find series."
@@ -197,7 +198,7 @@ def search(keyword: str) -> list[str]:
     """
     kw = keyword.lower()
     hits = []
-    for key, (name, dataset, variables) in ALL_SERIES.items():
+    for key, (name, _, _) in ALL_SERIES.items():
         if kw in key.lower() or kw in name.lower():
             hits.append(key)
 
@@ -286,6 +287,51 @@ def geos(quiet: Optional[bool] = False) -> None | dict[str, str]:
         return result
 
 
+def pickle_loader(filepath: Path | str) -> pd.DataFrame:
+    """
+    Load a dict-of-DataFrames pickle and flatten it into a single
+    DataFrame by outer-merging on columns shared across all frames.
+
+    Parameters
+    ----------
+    filepath : Path or str
+        Path to the .pkl file.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per shared-key combination, with all frames' columns merged in.
+    """
+    with open(filepath, "rb") as f:
+        data = pickle.load(f)
+    if isinstance(data, pd.DataFrame):
+        return data
+    if not isinstance(data, dict) or len(data) == 0:
+        return pd.DataFrame()
+    frames = list(data.values())
+    if len(frames) == 1:
+        return frames[0]
+    shared = set(frames[0].columns)
+    for df in frames[1:]:
+        shared &= set(df.columns)
+    merge_keys = []
+    for col in shared:
+        if all(not pd.api.types.is_numeric_dtype(df[col]) for df in frames):
+            merge_keys.append(col)
+    if not merge_keys:
+        parts = []
+        for name, df in data.items():
+            chunk = df.copy()
+            chunk.insert(0, "series", name)
+            parts.append(chunk)
+        return pd.concat(parts, ignore_index=True)
+    merged = reduce(
+        lambda left, right: pd.merge(left, right, on=merge_keys, how="outer"),
+        frames,
+    )
+    return merged
+
+
 # ╔═══════════════════════════════════════════════════════════════════════════╗
 # ║  CONFIGURATION  OBJECT                                                    ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
@@ -339,22 +385,23 @@ class Config:
         batch_size: int = 50,
     ) -> None:
         def _validate_geo_inputs(geo, state, county, tract):
-            # ── Dict passthrough (raw query) ─────────────────────────────
+            # ── (raw query) ─────────────────────────────
             if isinstance(geo, dict):
                 return geo
-
-            # ── None → default to state_all ──────────────────────────────
+            # ── None: default to state_all ──────────────────────────────
             if geo is None:
                 return GEO["state_all"]
-
-            # ── String key → validate + resolve ──────────────────────────
-            required_dct = geos(quiet=True)
+            # ── String key:  validate + resolve ──────────────────────────
+            tmp = geos(quiet=True)
+            if tmp:
+                required_dct = dict(tmp)
+            else:
+                raise ValueError("Failed to retrieve geo templates for validation.")
             if geo not in required_dct:
                 raise ValueError(
                     f"Geo template '{geo}' not recognized. "
                     f"Use geos() to see available templates."
                 )
-
             required_params = [
                 p.strip() for p in required_dct[geo].split(",") if p.strip() != "None"
             ]
@@ -371,10 +418,8 @@ class Config:
                     f"Geo template '{geo}' requires parameters: "
                     f"{', '.join(missing_params)}"
                 )
-
             # ── Resolve FIPS + format ────────────────────────────────────
             geo_template = GEO[geo]
-
             fips_kwargs = {}
             if state is not None:
                 fips_kwargs["st"] = STATE_FIPS[state] if state in STATE_FIPS else state
@@ -382,7 +427,6 @@ class Config:
                 fips_kwargs["co"] = county
             if tract is not None:
                 fips_kwargs["tr"] = tract
-
             return {
                 k: v.format(**fips_kwargs) if fips_kwargs else v
                 for k, v in geo_template.items()
@@ -401,9 +445,7 @@ class Config:
         self._series_input = series
         self.SERIES: dict = resolve_series(series)
         try:
-            self.GEO: dict = _validate_geo_inputs(
-                geo, state, county, tract
-            )  # ← no self.
+            self.GEO: dict = _validate_geo_inputs(geo, state, county, tract)
         except ValueError as e:
             print(f"Error validating geo inputs, set GEO to None: {e}")
             self.GEO: dict = {}
@@ -462,10 +504,8 @@ def _parse_variables(variables) -> tuple[list[str], str | None]:
 
 def _pull_wrapped(client_attr, var_list, group_name, geo, year) -> pd.DataFrame:
     if group_name:
-        # group() pulls return NAME automatically
         fields = (f"group({group_name})",)
     else:
-        # Always request NAME alongside individual vars for geo labeling
         fields = ("NAME", *var_list)
     geo_kwargs = {}
     if "for" in geo:
@@ -495,7 +535,6 @@ def _pull_raw(url_template, var_list, group_name, geo, year, api_key) -> pd.Data
 
 
 # ── Group variable label cache ───────────────────────────────────────────────
-# Metadata endpoints aren't rate-limited like data endpoints.
 
 _DATASET_PATHS = {
     "acs5": "acs/acs5",
@@ -526,7 +565,6 @@ def _fetch_group_labels(group_name: str, dataset: str, year: int) -> dict[str, s
     if not ds_path:
         return {}
 
-    # For decennial, year is fixed in the path already
     if dataset.startswith("dec/"):
         url = f"{_BASE_URL}/2020/{ds_path}/groups/{group_name}.json"
     else:
@@ -629,31 +667,28 @@ def _clean_frame(
     #   place:   "Boston city, Massachusetts"
     if "NAME" in df.columns:
         if "county" in df.columns:
-            # Extract county name from "Norfolk County, Massachusetts" → "Norfolk County"
             df.insert(
-                df.columns.get_loc("county") + 1,
+                int(df.columns.get_loc("county")) + int(1),
                 "county_name",
                 df["NAME"].str.split(",").str[0].str.strip(),
             )
         elif "place" in df.columns:
             df.insert(
-                df.columns.get_loc("place") + 1,
+                int(df.columns.get_loc("place")) + int(1),
                 "place_name",
                 df["NAME"].str.split(",").str[0].str.strip(),
             )
         elif "tract" in df.columns:
             df.insert(
-                df.columns.get_loc("tract") + 1,
+                int(df.columns.get_loc("tract")) + int(1),
                 "tract_name",
                 df["NAME"].str.split(",").str[0].str.strip(),
             )
-        # Drop the raw NAME column — we've extracted what we need
         df = df.drop(columns=["NAME"])
 
     # ── 2. Add state name alongside FIPS code ───────────────────────────
     if "state" in df.columns:
-        state_idx = df.columns.get_loc("state") + 1
-        # Don't double-insert if NAME already gave us the name
+        state_idx = int(df.columns.get_loc("state")) + int(1)
         if "state_name" not in df.columns:
             df.insert(
                 state_idx,
@@ -662,22 +697,18 @@ def _clean_frame(
             )
 
     # ── 3. Drop annotation / metadata columns from group() pulls ────────
-    #    Must happen BEFORE rename — otherwise renamed columns no longer
-    #    match their suffix pattern and survive the filter.
     if group_name is not None:
         drop = [c for c in df.columns if c.endswith(_JUNK_SUFFIXES) or c == "GEO_ID"]
         df = df.drop(columns=[c for c in drop if c in df.columns], errors="ignore")
 
     # ── 4. Rename variable columns ──────────────────────────────────────
     if group_name is not None:
-        # Group pull → fetch labels from Census metadata API
         labels = _fetch_group_labels(group_name, dataset, year)
         if labels:
             rename_map = {}
             for col in df.columns:
                 if col in labels:
                     rename_map[col] = f"{name}__{labels[col]}"
-            # Guard against duplicate labels (e.g. two vars with same short name)
             seen = set()
             safe_map = {}
             for old, new in rename_map.items():
@@ -689,7 +720,6 @@ def _clean_frame(
             df = df.rename(columns=safe_map)
 
     elif var_list:
-        # Individual variable pull
         if len(var_list) == 1:
             df = df.rename(columns={var_list[0]: name})
         else:
@@ -703,7 +733,6 @@ def _clean_frame(
                     rename_map[v] = f"{name}__{labels[v]}"
                 else:
                     rename_map[v] = f"{name}__{v}"  # fallback to raw code
-            # Guard against duplicate labels
             seen = set()
             safe_map = {}
             for old, new in rename_map.items():
