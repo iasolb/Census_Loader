@@ -280,13 +280,10 @@ Labels are fetched automatically from the Census metadata API.
 ### Loading saved results
 
 ```python
-import pickle
+from Census_Loader.utils import pickle_loader
 
-with open("./output/ma_counties.pkl", "rb") as f:
-    data = pickle.load(f)
+df = pickle_loader(fp.pkl) # flattens pkl to one dataframe (since only one geo-level can be queried at a time, easy merge.)
 
-data.keys()                          # dict_keys(['Total_Population', ...])
-data["Median_Household_Income"]      # one DataFrame
 ```
 
 ### Flattening into a single DataFrame
