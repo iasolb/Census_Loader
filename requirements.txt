@@ -2,4 +2,3 @@ pandas
 numpy
 census
 python-dotenv
-matplotlib
