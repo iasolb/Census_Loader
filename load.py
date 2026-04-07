@@ -2,26 +2,52 @@ import os
 import sys
 from pathlib import Path
 from typing import Optional
+import pickle
 import pandas as pd
-from .loader import Config, load_census_bureau
+from .utils import Config, _load_census_bureau
 from .census_scores import score
 from .series import ALL_SERIES, CATEGORIES, SUBCATEGORIES
 
+# PUBLIC API
 
-def pull_census(config: Config, apply_scores: bool = False) -> pd.DataFrame | None:
+
+def pull_census(
+    config: Config, apply_scores: bool = False
+) -> dict[str, pd.DataFrame] | None:
+    """
+    Pull Census Bureau data and optionally apply scoring.
+
+    Returns a dict of DataFrames keyed by friendly name, or None on failure.
+    Each DataFrame has rows = geographies and columns = variables + geo IDs.
+    The result is persisted as a pickle for lossless round-tripping.
+    """
     cfg = config if isinstance(config, Config) else None
     if cfg is None:
         print("Incorrect Configuration Format.")
         return None
-    if cfg.SERIES != ALL_SERIES:
-        print("Custom series catalog provided. Pulling subset of Census Bureau data.")
-    raw = pd.DataFrame(load_census_bureau(config=config))
+
+    if cfg._series_input is not None:
+        print(f"Custom series selection: {len(cfg.SERIES)} series to pull.")
+
+    result = _load_census_bureau(config=config)
+    if result is None:
+        return None
+
     if apply_scores:
-        output = score(raw)
+        output = score(result)
     else:
-        output = raw
+        output = result
+
+    # ── Persist ──────────────────────────────────────────────────────────
     config.OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
-    out_file = config.OUTPUT_PATH / config.FILENAME
-    pd.DataFrame(output).to_csv(out_file)
-    print(f"\nSaved → {out_file}")
+
+    fname = config.FILENAME
+    if not fname.endswith(".pkl"):
+        fname = fname.rsplit(".", 1)[0] + ".pkl" if "." in fname else fname + ".pkl"
+    pkl_file = config.OUTPUT_PATH / fname
+
+    with open(pkl_file, "wb") as f:
+        pickle.dump(output, f)
+    print(f"\n  Saved → {pkl_file}")
+
     return output
