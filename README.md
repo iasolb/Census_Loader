@@ -29,18 +29,28 @@ result = pull_census(cfg)
 
 ## Setup
 
+### Install
+
+```bash
+pip install census-loader
+```
+
+Or from a checkout of this repository:
+
+```bash
+pip install -e .
+```
+
 ### Requirements
+
+The dependencies below are installed automatically by pip; `requirements.txt` is kept for reference:
 
 ```
 pandas
 numpy
 census
 python-dotenv
-
-```
-
-```bash
-pip install -r requirements.txt
+requests
 ```
 
 ### API Key
@@ -400,3 +410,9 @@ Free Census API keys allow 500 requests per day with a batch size of 50 variable
 | DECENNIAL | 9 | DECENNIAL_REDISTRICTING, DECENNIAL_DHC |
 | DATA_PROFILES | 4 | — |
 | **Total** | **169** | |
+
+---
+
+## License
+
+[MIT](LICENSE)

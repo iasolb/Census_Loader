@@ -370,6 +370,10 @@ class Config:
         Use ``available()``, ``search()``, ``info()`` to explore options.
     batch_size : int
         Max series per API batch (default 50).
+    api_key : str, optional
+        Census Bureau API key. If omitted, CENSUS_API_KEY is read from the
+        environment (including a .env file). Get a free key at
+        https://api.census.gov/data/key_signup.html.
     """
 
     def __init__(
@@ -383,6 +387,7 @@ class Config:
         tract: str | None = None,
         series: str | list | dict | None = None,
         batch_size: int = 50,
+        api_key: str | None = None,
     ) -> None:
         def _validate_geo_inputs(geo, state, county, tract):
             # ── (raw query) ─────────────────────────────
@@ -441,6 +446,7 @@ class Config:
         self.OUTPUT_PATH: Path = Path(output_path).resolve()
         self.YEAR: int = year
         self.BATCH_SIZE: int = batch_size
+        self.API_KEY: str | None = api_key
         # ── Resolve series spec → internal dict ──────────────────────────
         self._series_input = series
         self.SERIES: dict = resolve_series(series)
@@ -786,9 +792,13 @@ def _load_census_bureau(config: Config) -> dict[str, pd.DataFrame] | None:
     """
     try:
         load_dotenv()
-        api_key = os.getenv("CENSUS_API_KEY")
+        api_key = getattr(config, "API_KEY", None) or os.getenv("CENSUS_API_KEY")
         if not api_key:
-            raise ValueError("CENSUS_API_KEY not found in environment")
+            raise ValueError(
+                "CENSUS_API_KEY not found. Pass api_key= to Config or set "
+                "CENSUS_API_KEY in your environment or .env file. Get a free "
+                "key at https://api.census.gov/data/key_signup.html"
+            )
     except Exception as e:
         print(f"Invalid / No API Key provided. {e}")
         return None
