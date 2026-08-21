@@ -1,9 +1,4 @@
-import os
-import sys
-from pathlib import Path
-from typing import Optional
 import pickle
-from functools import reduce
 import pandas as pd
 from .utils import Config, _load_census_bureau
 from .series import ALL_SERIES, CATEGORIES, SUBCATEGORIES

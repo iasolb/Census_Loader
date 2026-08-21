@@ -54,14 +54,16 @@ CENSUS_API_KEY=your_key_here
 ### Project Structure
 
 ```
-your_project/
-  .env
-  Census_Loader/
-    __init__.py
+Census_Loader/
+  pyproject.toml
+  requirements.txt
+  README.md
+  .env-example
+  src/census_loader/
+    __init__.py       # public API re-exports
     utils.py          # Config, loader, discovery tools
     load.py           # pull_census entry point
     series.py         # series catalog, GEO templates, FIPS codes
-    census_scores.py  # optional scoring/transforms
 ```
 
 ---
@@ -69,8 +71,7 @@ your_project/
 ## Quickstart
 
 ```python
-from Census_Loader.load import pull_census
-from Census_Loader.utils import Config
+from census_loader import Config, pull_census
 
 cfg = Config(
     "ma_counties.pkl",
@@ -105,7 +106,7 @@ You never need to open `series.py`. Three discovery functions let you browse, se
 ### Browse categories
 
 ```python
-from Census_Loader.utils import available, search, info
+from census_loader import available, search, info
 
 available()
 ```
@@ -170,7 +171,7 @@ info("MEDIAN_HH_INCOME")
 ### Browse geography templates
 
 ```python
-from Census_Loader.utils import geos
+from census_loader import geos
 
 geos()
 ```
@@ -280,9 +281,9 @@ Labels are fetched automatically from the Census metadata API.
 ### Loading saved results
 
 ```python
-from Census_Loader.utils import pickle_loader
+from census_loader import pickle_loader
 
-df = pickle_loader(fp.pkl) # flattens pkl to one dataframe (since only one geo-level can be queried at a time, easy merge.)
+df = pickle_loader("ma_counties.pkl") # flattens pkl to one dataframe (since only one geo-level can be queried at a time, easy merge.)
 
 ```
 
