@@ -69,12 +69,12 @@ result["Median_Household_Income"]
 You never need to open `series.py`. Three discovery functions browse,
 search, and inspect everything from a REPL or notebook:
 
-- `available()` — browse categories; `available("INCOME")` drills into a
+- `available()`: browse categories; `available("INCOME")` drills into a
   category or subcategory.
-- `search("poverty")` — search by keyword.
-- `info("MEDIAN_HH_INCOME")` — full details (name, category, dataset,
+- `search("poverty")`: search by keyword.
+- `info("MEDIAN_HH_INCOME")`: full details (name, category, dataset,
   underlying variable codes).
-- `geos()` — browse geography templates.
+- `geos()`: browse geography templates.
 
 ## Output format
 
@@ -116,7 +116,7 @@ Config(
 
 ### Series selection
 
-The `series` parameter accepts any granularity — individual series,
+The `series` parameter accepts any granularity: individual series,
 subcategories, categories, or a mix:
 
 ```python
@@ -151,7 +151,7 @@ Config(..., geo="school_district_in_state", state="Massachusetts")
 Config(..., geo="zcta_all")
 ```
 
-State names resolve automatically — `"Massachusetts"` and `"25"` both work.
+State names resolve automatically, so `"Massachusetts"` and `"25"` both work.
 For edge cases not covered by templates, pass a raw dict:
 `Config(..., geo={"for": "county:017", "in": "state:25"})`.
 
@@ -218,7 +218,7 @@ pull_census(cfg)
 | POPULATION | 13 | TOTAL_POPULATION, AGE_DETAIL |
 | RACE_ETHNICITY | 13 | RACE, HISPANIC_ORIGIN |
 | NATIVITY_MIGRATION | 11 | NATIVITY, MIGRATION |
-| LANGUAGE | 6 | — |
+| LANGUAGE | 6 | none |
 | EDUCATION | 10 | SCHOOL_ENROLLMENT, EDUCATIONAL_ATTAINMENT |
 | HOUSEHOLDS | 12 | HOUSEHOLD_TYPE, MARITAL_STATUS, FERTILITY |
 | INCOME | 18 | HOUSEHOLD_INCOME, EARNINGS, PUBLIC_ASSISTANCE |
@@ -226,13 +226,21 @@ pull_census(cfg)
 | HEALTH_INSURANCE | 6 | ACS_HEALTH_INSURANCE, SAHIE_HEALTH_INSURANCE |
 | EMPLOYMENT | 15 | EMPLOYMENT_STATUS, OCCUPATION_INDUSTRY, COMMUTING |
 | HOUSING | 25 | HOUSING_UNITS, TENURE, HOME_VALUE, HOUSING_INFRASTRUCTURE |
-| DISABILITY | 5 | — |
-| VETERANS | 4 | — |
-| PEP_POPULATION | 6 | — |
+| DISABILITY | 5 | none |
+| VETERANS | 4 | none |
+| PEP_POPULATION | 6 | none |
 | DECENNIAL | 9 | DECENNIAL_REDISTRICTING, DECENNIAL_DHC |
-| DATA_PROFILES | 4 | — |
+| DATA_PROFILES | 4 | none |
 | **Total** | **169** | |
 
 ## License
 
 [MIT](LICENSE)
+
+## Start here
+
+`src/census_loader/series.py` is the heart of this project: the catalog that
+maps every friendly series name onto its Census variable codes, and the
+reason the wrapper exists at all. `src/census_loader/load.py` then shows how
+a `Config` becomes batched API calls and labelled DataFrames, and
+`tests/test_catalog.py` shows the catalog's invariants.
