@@ -85,6 +85,12 @@ on the series type (single variable, multi-variable, group table); labels
 are fetched automatically from the Census metadata API. `pickle_loader`
 flattens a saved pickle to one DataFrame.
 
+| Series type | Example key | Column names |
+|---|---|---|
+| Single variable | `TOTAL_POP` | `Total_Population` |
+| Multi-variable | `HOMEOWNERSHIP_RATE` | `Homeownership_Rate__Owner occupied`, `Homeownership_Rate__Total` |
+| Group table | `HH_INCOME_BRACKETS` | `Household_Income_Distribution__Less than $10,000`, `Household_Income_Distribution__$10,000 to $14,999`, ... |
+
 ## API limits
 
 Free Census API keys allow 500 requests per day with a batch size of 50
@@ -97,6 +103,21 @@ cached per session.
 The sections below hold the full reference: Config options, series
 selection, geography templates, flattening into a single DataFrame,
 worked examples, and the complete category table.
+
+### Project layout
+
+```
+Census_Loader/
+  pyproject.toml
+  requirements.txt
+  README.md
+  .env-example
+  src/census_loader/
+    __init__.py       # public API re-exports
+    utils.py          # Config, loader, discovery tools
+    load.py           # pull_census entry point
+    series.py         # series catalog, GEO templates, FIPS codes
+```
 
 ### Config Reference
 
