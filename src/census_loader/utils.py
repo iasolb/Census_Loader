@@ -1,6 +1,5 @@
 from typing import Optional, Any
 from pathlib import Path
-from itertools import islice
 import pandas as pd
 import requests
 from dotenv import load_dotenv
@@ -10,6 +9,7 @@ from functools import reduce
 import pickle
 from .series import (
     ALL_SERIES,
+    PREDICATES,
     POPULATION,
     RACE_ETHNICITY,
     NATIVITY_MIGRATION,
@@ -437,10 +437,26 @@ class Config:
                 for k, v in geo_template.items()
             }
 
+        # BATCH_SIZE IS CURRENTLY INERT, and saying so is the point.
+        #
+        # The Census API caps a single request at about 50 variables. That cap
+        # applies per CALL, so honouring it means splitting one wide series
+        # across several requests and joining the responses on their geography
+        # columns. That is not implemented.
+        #
+        # What this parameter used to do was chunk the SERIES dictionary, which
+        # changed nothing: every series already gets its own request because
+        # each one carries its own dataset and variable list. The chunking was
+        # removed rather than left in place looking meaningful.
+        #
+        # It is kept as an accepted argument so existing callers do not break,
+        # and it warns rather than pretending to protect anything.
         if batch_size > 50:
             print(
-                f"Warning: batch_size={batch_size} may exceed API limits "
-                f"(50 for free key) and cause failures. Use with caution."
+                f"Note: batch_size={batch_size} is above the Census per-request "
+                f"variable cap of ~50, but batch_size is not currently enforced "
+                f"anywhere. A series whose variable list exceeds the cap will "
+                f"fail on its own request regardless of this value."
             )
         self.FILENAME: str = filename
         self.OUTPUT_PATH: Path = Path(output_path).resolve()
@@ -450,11 +466,12 @@ class Config:
         # ── Resolve series spec → internal dict ──────────────────────────
         self._series_input = series
         self.SERIES: dict = resolve_series(series)
-        try:
-            self.GEO: dict = _validate_geo_inputs(geo, state, county, tract)
-        except ValueError as e:
-            print(f"Error validating geo inputs, set GEO to None: {e}")
-            self.GEO: dict = {}
+        # A bad geo spec fails construction. It used to be caught here, printed
+        # as a warning, and downgraded to an empty GEO, so a misspelled
+        # template or a missing required state/county silently built a Config
+        # that then failed much later with an unrelated-looking error. The
+        # guard already raises an actionable message; let it through.
+        self.GEO: dict = _validate_geo_inputs(geo, state, county, tract)
 
     def __str__(self) -> str:
         si = self._series_input
@@ -601,7 +618,12 @@ def _fetch_group_labels(group_name: str, dataset: str, year: int) -> dict[str, s
         _group_label_cache[cache_key] = labels
         return labels
 
-    except Exception:
+    except Exception as e:
+        # Say so. Falling back to raw variable codes is a legitimate degradation,
+        # but a SILENT one is indistinguishable from a group that genuinely has
+        # no labels, and the caller then ships raw codes as if that were correct.
+        print(f"  ! label lookup failed for {group_name} ({dataset}/{year}): {e}")
+        print("    falling back to raw variable codes for this group")
         _group_label_cache[cache_key] = {}
         return {}
 
@@ -749,6 +771,51 @@ def _clean_frame(
                     seen.add(new)
             df = df.rename(columns=safe_map)
 
+    # ── 4b. Decode categorical predicate codes into readable labels ─────
+    # PEP and SAHIE return their breakdown dimensions as bare integers: a RACE
+    # column holding 0-6, a SEXCAT column holding 0-2. series.PREDICATES has
+    # held the meaning of every one of those codes since the catalog was
+    # written, and nothing ever applied it, so these pulls shipped raw numbers
+    # while the decode map sat one import away. The keys are prefixed by
+    # dataset family (PEP_RACE, SAHIE_SEXCAT), and the API column is the part
+    # after that prefix.
+    #
+    # The original code is kept beside the label in a `<col>_code` column: it
+    # is what the API returned, some callers will have written it into
+    # downstream joins, and dropping it silently would break them.
+    _prefix = None
+    if dataset.startswith("pep"):
+        _prefix = "PEP"
+    elif dataset.startswith("timeseries/healthins") or "sahie" in dataset:
+        _prefix = "SAHIE"
+
+    # Decoded columns hold text and must survive step 6, which otherwise
+    # coerces every non-geo column to a number and would turn every label
+    # straight back into NaN. The `<col>_code` twin is deliberately NOT
+    # exempt: it carries exactly what the column used to carry, so it gets
+    # cast exactly as that column used to be, and anything downstream joining
+    # on the numeric code keeps working.
+    _decoded_cols: set[str] = set()
+
+    if _prefix is not None:
+        for _key, _mapping in PREDICATES.items():
+            if not _key.startswith(_prefix + "_"):
+                continue
+            _col = _key[len(_prefix) + 1:]
+            if _col not in df.columns:
+                continue
+            # The API sends these as strings; the map is keyed by int.
+            _numeric = pd.to_numeric(df[_col], errors="coerce")
+            _decoded = _numeric.map(_mapping)
+            # Only rewrite where the code was recognised. An unmapped value
+            # keeps its original text rather than becoming NaN, because a new
+            # category appearing upstream must not silently blank a column.
+            if _decoded.notna().any():
+                _idx = int(df.columns.get_loc(_col))
+                df.insert(_idx + 1, f"{_col}_code", df[_col])
+                df[_col] = _decoded.where(_decoded.notna(), df[_col].astype(object))
+                _decoded_cols.add(_col)
+
     # ── 5. Move geo columns to front in a sensible order ───────────────
     _GEO_ORDER = [
         "state",
@@ -772,8 +839,12 @@ def _clean_frame(
     df = df[geo_present + other_cols]
 
     # ── 6. Cast numeric columns ─────────────────────────────────────────
+    # `errors="coerce"` means any column that is genuinely textual is blanked,
+    # so decoded predicate labels are held out by name. Note the broader edge
+    # this leaves in place: any OTHER non-numeric column the API returns is
+    # still silently coerced to NaN here.
     for col in df.columns:
-        if col not in geo_present:
+        if col not in geo_present and col not in _decoded_cols:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     return df
@@ -816,40 +887,47 @@ def _load_census_bureau(config: Config) -> dict[str, pd.DataFrame] | None:
     frames: dict[str, pd.DataFrame] = {}
     failed: list[tuple[str, str, str]] = []
 
-    def _batched(data: dict, size: int):
-        it = iter(data.items())
-        for _ in range(0, len(data), size):
-            yield dict(islice(it, size))
+    # One request per series, with a delay between each to stay inside the
+    # rate limit. This used to be wrapped in a `_batched()` generator that
+    # chunked `series_dict` by BATCH_SIZE, which had NO functional effect: each
+    # series carries its own dataset and its own variable list, so it always
+    # got its own call regardless of which chunk it landed in. The chunking
+    # only made the code look like it batched.
+    #
+    # The real Census constraint BATCH_SIZE alludes to is a per-CALL cap of
+    # about 50 variables, which applies to one series' variable list, not to
+    # the number of series. Honouring it means splitting a wide series across
+    # several calls and joining the responses on their geography columns.
+    # That is a feature, not a fix, and it is not implemented: see the note on
+    # BATCH_SIZE in Config.
+    for series_id, (name, dataset, variables) in series_dict.items():
+        try:
+            var_list, group_name = _parse_variables(variables)
+            dispatch = DATASET_DISPATCH.get(dataset)
 
-    for batch in _batched(series_dict, config.BATCH_SIZE):
-        for series_id, (name, dataset, variables) in batch.items():
-            try:
-                var_list, group_name = _parse_variables(variables)
-                dispatch = DATASET_DISPATCH.get(dataset)
+            if dispatch is None:
+                raise KeyError(f"Unknown dataset '{dataset}' for {series_id}")
 
-                if dispatch is None:
-                    raise KeyError(f"Unknown dataset '{dataset}' for {series_id}")
+            if callable(dispatch):
+                client_attr = dispatch(census_client)
+                df = _pull_wrapped(client_attr, var_list, group_name, geo, year)
+            else:
+                df = _pull_raw(dispatch, var_list, group_name, geo, year, api_key)
 
-                if callable(dispatch):
-                    client_attr = dispatch(census_client)
-                    df = _pull_wrapped(client_attr, var_list, group_name, geo, year)
-                else:
-                    df = _pull_raw(dispatch, var_list, group_name, geo, year, api_key)
+            df = _clean_frame(df, name, var_list, group_name, dataset, year)
+            df.name = name
+            frames[name] = df
 
-                df = _clean_frame(df, name, var_list, group_name, dataset, year)
-                df.name = name
-                frames[name] = df
+            var_label = (
+                f"group({group_name})" if group_name else f"{len(var_list)} vars"
+            )
+            print(f"  ✓ {name:<40s} ({series_id:<30s} [{dataset}] {var_label})")
+            time.sleep(0.5)
 
-                var_label = (
-                    f"group({group_name})" if group_name else f"{len(var_list)} vars"
-                )
-                print(f"  ✓ {name:<40s} ({series_id:<30s} [{dataset}] {var_label})")
-                time.sleep(0.5)
-
-            except Exception as e:
-                failed.append((series_id, name, str(e)))
-                print(f"  ✗ {name:<40s} ({series_id}) — {e}")
-                time.sleep(0.5)
+        except Exception as e:
+            failed.append((series_id, name, str(e)))
+            print(f"  ✗ {name:<40s} ({series_id}) — {e}")
+            time.sleep(0.5)
 
     if failed:
         print(f"\n⚠  {len(failed)} series failed:")
