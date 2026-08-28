@@ -1,7 +1,10 @@
 name: Tests
 
 on:
+  # Only main on push. Without the branch filter, a pull request from a branch
+  # in this repo triggers BOTH events and every job runs twice.
   push:
+    branches: [main]
   pull_request:
 
 jobs:
