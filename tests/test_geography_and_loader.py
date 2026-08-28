@@ -33,11 +33,18 @@ def test_config_accepts_fips_and_preserves_county_and_tract():
     assert config.GEO["in"] == "state:25&in=county:017&in=tract:4041.00"
 
 
-def test_config_reports_missing_geography_parameter(capsys):
-    config = Config("out.csv", Path("."), geo="county_in_state")
-    captured = capsys.readouterr().out
-    assert config.GEO == {}
-    assert "requires parameters: state" in captured
+def test_config_refuses_a_missing_geography_parameter():
+    """A geo template with a required parameter missing fails construction.
+
+    CHANGED 2026-08-28, and it is a deliberate behaviour break. This used to
+    catch the ValueError, print it, and continue with `GEO == {}`, which this
+    test asserted. That meant a config with an unusable geography built
+    successfully and failed later somewhere unrelated-looking. The message was
+    always actionable; only the swallowing was wrong, so the assertion on the
+    message survives and the assertion on the broken object does not.
+    """
+    with pytest.raises(ValueError, match="requires parameters: state"):
+        Config("out.csv", Path("."), geo="county_in_state")
 
 
 def test_missing_api_key_is_named_and_actionable(monkeypatch, capsys):

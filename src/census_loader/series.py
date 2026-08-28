@@ -8,11 +8,20 @@ exactly what the client needs to build a call like:
 
     data = c.acs5.get(series.variables, {**geo, **series.predicates})
 
-Hierarchy (same pattern as the FRED catalog):
+Hierarchy, smallest to largest. Subcategory dicts merge into category dicts,
+and categories merge into ALL_SERIES:
 
-    Subcategory:  from census_series import AGE_SEX, RACE, HOUSEHOLD_INCOME
-    Category:     from census_series import DEMOGRAPHICS, INCOME_POVERTY
-    Everything:   from census_series import ALL_SERIES
+    Subcategory:  from census_loader.series import TOTAL_POPULATION, AGE_DETAIL
+    Category:     from census_loader.series import POPULATION, INCOME
+    Everything:   from census_loader.series import ALL_SERIES
+
+Two lookups sit alongside them: CATEGORIES maps a category name to its dict,
+and SUBCATEGORIES maps a category name to its subcategory dicts. Use
+`available()`, `search()` and `info()` from the package root to explore all of
+this interactively rather than reading this file.
+
+Most callers never import from here at all: pass series keys, a category name,
+or nothing (for everything) to Config, which resolves them for you.
 
 Tuple schema
 ------------
